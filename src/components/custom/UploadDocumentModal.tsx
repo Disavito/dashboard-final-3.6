@@ -53,7 +53,7 @@ export function UploadDocumentModal({
       if (!session) throw new Error('No hay sesión activa.');
 
       // Determinar bucket
-      const bucketName = documentType === 'Planos de ubicación' ? 'planos' : 'memorias';
+      const bucketName = documentType === 'Planos de ubicación' ? 'planos' : 'memoria-descriptiva';
       const filePath = `${socioId}/${Date.now()}-${selectedFile.name}`;
 
       // Subida a Storage
