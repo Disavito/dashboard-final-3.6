@@ -291,11 +291,7 @@ function SocioTitularRegistrationForm({ socioId, onClose, onSuccess }: SocioTitu
     if (!dni || dni.length !== 8) return false;
 
     setIsReniecSearching(true);
-    let dataFound = false;
-
-    const fieldsToCheck = ['nombres', 'apellidoPaterno', 'apellidoMaterno', 'fechaNacimiento'];
-    const checkMissingFields = () => fieldsToCheck.some(field => !watch(field as keyof SocioTitularFormValues));
-
+    
     const formatDateToISO = (dateStr: string | undefined) => {
       if (!dateStr) return '';
       if (dateStr.includes('-')) return dateStr;
@@ -307,85 +303,104 @@ function SocioTitularRegistrationForm({ socioId, onClose, onSuccess }: SocioTitu
       return dateStr;
     };
 
-    // API 1: Consultas Peru
-    try {
-      const token = import.meta.env.VITE_CONSULTAS_PERU_API_TOKEN;
-      if (token) {
-        const response = await axios.post(`https://api.consultasperu.com/api/v1/query`, {
-          token: token,
-          type_document: "dni",
-          document_number: dni,
-        }, { timeout: 5000 });
+// --- LÓGICA DE CONSULTA UNIFICADA (BORRA LAS DECLARACIONES ANTERIORES DE dataFound) ---
+let dataFound = false; // ESTA ES LA ÚNICA DECLARACIÓN QUE DEBE EXISTIR
 
-        const data = response.data.data;
-        if (response.data?.success && data) {
-          setValue('nombres', data.name || '');
-          const surnames = data.surname ? data.surname.split(' ') : [];
-          setValue('apellidoPaterno', surnames[0] || '');
-          setValue('apellidoMaterno', surnames[1] || '');
-          setValue('fechaNacimiento', data.date_of_birth || '');
-          setValue('direccionDNI', data.address || '');
-          setValue('regionDNI', data.department || '');
-          setValue('provinciaDNI', data.province || '');
-          setValue('distritoDNI', data.district || '');
-          dataFound = true;
-        }
+const hasMissingCriticalData = () => {
+  return !watch('nombres') || !watch('fechaNacimiento') || !watch('direccionDNI');
+};
+
+// --- API 1: Consultas Peru ---
+try {
+  console.log("🔍 Intentando con API 1...");
+  const token = import.meta.env.VITE_CONSULTAS_PERU_API_TOKEN;
+  if (token) {
+    const response = await axios.post(`https://api.consultasperu.com/api/v1/query`, {
+      token: token,
+      type_document: "dni",
+      document_number: dni,
+    }, { timeout: 5000 });
+
+    const data = response.data.data;
+    if (response.data?.success && data) {
+      console.log("✅ API 1: Datos base encontrados.");
+      if (data.name) setValue('nombres', data.name);
+      const surnames = data.surname ? data.surname.split(' ') : [];
+      if (surnames[0]) setValue('apellidoPaterno', surnames[0]);
+      if (surnames[1]) setValue('apellidoMaterno', surnames[1]);
+      if (data.date_of_birth) setValue('fechaNacimiento', data.date_of_birth);
+      if (data.address) setValue('direccionDNI', data.address);
+      if (data.department) setValue('regionDNI', data.department);
+      if (data.province) setValue('provinciaDNI', data.province);
+      if (data.district) setValue('distritoDNI', data.district);
+      dataFound = true;
+    }
+  }
+} catch (e) { 
+  console.warn('❌ API 1 falló'); 
+}
+
+// --- API 2: MiApi Cloud ---
+// NOTA: Aquí ya no uses "let dataFound", solo usa la variable que declaramos arriba
+if (!dataFound || hasMissingCriticalData()) {
+  try {
+    console.log("🔍 Intentando con API 2...");
+    const secondaryToken = import.meta.env.VITE_MIAPI_CLOUD_API_TOKEN;
+    if (secondaryToken) {
+      const res = await axios.get(`https://miapi.cloud/v1/dni/${dni}`, {
+        headers: { 'Authorization': `Bearer ${secondaryToken}` },
+        timeout: 5000
+      });
+      const sData = res.data.datos;
+      if (res.data?.success && sData) {
+        console.log("✅ API 2: Datos recuperados.");
+        if (!watch('nombres')) setValue('nombres', sData.nombres);
+        if (!watch('apellidoPaterno')) setValue('apellidoPaterno', sData.ape_paterno);
+        if (!watch('apellidoMaterno')) setValue('apellidoMaterno', sData.ape_materno);
+        if (!watch('fechaNacimiento') && sData.nacimiento) setValue('fechaNacimiento', sData.nacimiento);
+        if (!watch('direccionDNI')) setValue('direccionDNI', sData.domiciliado?.direccion || '');
+        if (!watch('regionDNI')) setValue('regionDNI', sData.domiciliado?.departamento || '');
+        if (!watch('provinciaDNI')) setValue('provinciaDNI', sData.domiciliado?.provincia || '');
+        if (!watch('distritoDNI')) setValue('distritoDNI', sData.domiciliado?.distrito || '');
+        dataFound = true;
       }
-    } catch (e) { console.warn('API 1 falló'); }
-
-    // API 2: MiApi Cloud
-    if (!dataFound || checkMissingFields()) {
-      try {
-        const secondaryToken = import.meta.env.VITE_MIAPI_CLOUD_API_TOKEN;
-        if (secondaryToken) {
-          const res = await axios.get(`https://miapi.cloud/v1/dni/${dni}`, {
-            headers: { 'Authorization': `Bearer ${secondaryToken}` },
-            timeout: 5000
-          });
-          const sData = res.data.datos;
-          if (res.data?.success && sData) {
-            if (!watch('nombres')) setValue('nombres', sData.nombres);
-            if (!watch('apellidoPaterno')) setValue('apellidoPaterno', sData.ape_paterno);
-            if (!watch('apellidoMaterno')) setValue('apellidoMaterno', sData.ape_materno);
-            
-            // Ubicación API 2
-            if (!watch('direccionDNI')) setValue('direccionDNI', sData.domiciliado?.direccion || '');
-            if (!watch('regionDNI')) setValue('regionDNI', sData.domiciliado?.departamento || '');
-            if (!watch('provinciaDNI')) setValue('provinciaDNI', sData.domiciliado?.provincia || '');
-            if (!watch('distritoDNI')) setValue('distritoDNI', sData.domiciliado?.distrito || '');
-            
-            dataFound = true;
-          }
-        }
-      } catch (e) { console.warn('API 2 falló'); }
     }
+  } catch (e) { 
+    console.warn('❌ API 2 falló'); 
+  }
+}
 
-    // API 3: ConsultaDatos (Basado en el JSON proporcionado)
-    if (!dataFound || checkMissingFields()) {
-      try {
-        const tertiaryToken = import.meta.env.VITE_CONSULTADATOS_TOKEN;
-        if (tertiaryToken) {
-          const targetUrl = `https://api2.consultadatos.com/api/dni/${dni}`;
-          const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
-          
-          const tRes = await axios.get(proxyUrl);
-          if (tRes.data && tRes.data.contents) {
-            const tData = JSON.parse(tRes.data.contents);
-            if (tData && (tData.DNI || tData.NOMBRES)) {
-              if (!watch('nombres')) setValue('nombres', tData.NOMBRES || '');
-              if (!watch('apellidoPaterno')) setValue('apellidoPaterno', tData.AP_PAT || '');
-              if (!watch('apellidoMaterno')) setValue('apellidoMaterno', tData.AP_MAT || '');
-              if (!watch('fechaNacimiento')) setValue('fechaNacimiento', formatDateToISO(tData.FECHA_NAC));
-              
-              // Ubicación API 3 (Solo entrega DIRECCION)
-              if (!watch('direccionDNI')) setValue('direccionDNI', tData.DIRECCION || '');
-              
-              dataFound = true;
-            }
-          }
-        }
-      } catch (e) { console.warn('API 3 falló'); }
+// --- API 3: Vía Supabase RPC ---
+if (!dataFound || hasMissingCriticalData()) {
+  try {
+    console.log("🚀 Consultando vía Supabase SQL Function...");
+    
+    // Llamamos a la función que acabamos de crear en el SQL Editor
+    const { data: tData, error } = await supabase.rpc('consultar_dni_externo', { 
+      p_dni: dni 
+    });
+
+    if (!error && tData) {
+      console.log("🏆 ÉXITO: Datos recuperados desde SQL/Supabase");
+      
+      if (!watch('nombres')) setValue('nombres', tData.NOMBRES || '');
+      if (!watch('apellidoPaterno')) setValue('apellidoPaterno', tData.AP_PAT || '');
+      if (!watch('apellidoMaterno')) setValue('apellidoMaterno', tData.AP_MAT || '');
+      
+      if (tData.FECHA_NAC && (!watch('fechaNacimiento') || watch('fechaNacimiento') === '')) {
+         setValue('fechaNacimiento', formatDateToISO(tData.FECHA_NAC));
+      }
+      
+      if (!watch('direccionDNI')) setValue('direccionDNI', tData.DIRECCION || '');
+      
+      dataFound = true;
+    } else {
+      console.error("Error en la función SQL de Supabase:", error);
     }
+  } catch (e) {
+    console.error('Error de conexión con la base de datos:', e);
+  }
+}
 
     setIsReniecSearching(false);
     if (dataFound) toast.success('Datos recuperados de Reniec');
