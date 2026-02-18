@@ -25,7 +25,7 @@ import DocumentCardView from '@/components/ui-custom/DocumentCardView';
 import DeletionRequestsTable from '@/components/documents/DeletionRequestsTable';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import SearchInputWithDebounce from '@/components/custom/SearchInputWithDebounce'; // Importar el nuevo componente
+import SearchInputWithDebounce from '@/components/custom/SearchInputWithDebounce';
 
 // Interfaces
 interface SocioDocumento {
@@ -67,7 +67,7 @@ const getBucketNameForDocumentType = (docType: string): string => {
 function PartnerDocuments() {
   const [sociosConDocumentos, setSociosConDocumentos] = useState<SocioConDocumentos[]>([]);
   const [loading, setLoading] = useState(true);
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState(''); // Ahora se actualiza desde el componente hijo
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [selectedLocalidad, setSelectedLocalidad] = useState('all');
   const [localidades, setLocalidades] = useState<string[]>([]);
   const [rowSelection, setRowSelection] = useState<Record<number, boolean>>({});
@@ -89,9 +89,14 @@ function PartnerDocuments() {
   }>({ isOpen: false, documentId: null, documentLink: null, documentType: null, socioName: null });
   
   const [isDeleting, setIsDeleting] = useState(false);
+  
+  // --- GESTIÓN DE PERMISOS ACTUALIZADA ---
   const { roles, loading: userLoading } = useUser();
   const isAdmin = useMemo(() => roles?.includes('admin') ?? false, [roles]);
   const isEngineer = useMemo(() => roles?.includes('engineer') ?? false, [roles]);
+  
+  // Permiso unificado para gestión de ingeniería (Marcar lote y acciones masivas)
+  const canManageEngineering = useMemo(() => isAdmin || isEngineer, [isAdmin, isEngineer]);
 
   const allowedDocumentTypes = useMemo(() => [
     "Planos de ubicación", "Memoria descriptiva", "Ficha", "Contrato", "Comprobante de Pago"
@@ -100,8 +105,6 @@ function PartnerDocuments() {
   const requiredDocumentTypes: DocumentoRequerido[] = useMemo(() => [
     "Planos de ubicación", "Memoria descriptiva"
   ], []);
-
-  // Eliminamos el useEffect de debounce de aquí, ahora está en SearchInputWithDebounce
 
   const fetchAllData = useCallback(async () => {
     setLoading(true);
@@ -179,15 +182,14 @@ function PartnerDocuments() {
   useEffect(() => { fetchAllData(); }, [fetchAllData]);
 
   const handleUpdateLoteMedido = useCallback(async (socioId: string, newValue: boolean, currentSocio: SocioConDocumentos) => {
-    if (!isAdmin) return toast.error('Acceso restringido a administradores');
+    // CORRECCIÓN: Permitir a Admin e Ingeniero
+    if (!canManageEngineering) return toast.error('Acceso restringido a personal autorizado');
     
-    // Usar currentSocio directamente para evitar dependencia de sociosConDocumentos
     const hasRequiredDocs = currentSocio.socio_documentos.some(d => requiredDocumentTypes.includes(d.tipo_documento as any));
     if (!newValue && hasRequiredDocs) {
       return toast.warning('Acción bloqueada', { description: 'No se puede desmarcar un lote que ya tiene planos o memoria subidos.' });
     }
 
-    // Actualización optimista del estado local
     setSociosConDocumentos(prev => prev.map(s => s.id === socioId ? { ...s, is_lote_medido: newValue } : s));
     
     try {
@@ -195,14 +197,14 @@ function PartnerDocuments() {
       if (error) throw error;
       toast.success('Estado actualizado');
     } catch (error: any) {
-      // Revertir la actualización optimista en caso de error
       setSociosConDocumentos(prev => prev.map(s => s.id === socioId ? { ...s, is_lote_medido: currentSocio.is_lote_medido } : s));
       toast.error('Error al actualizar', { description: error.message || 'Hubo un problema al guardar el cambio.' });
     }
-  }, [isAdmin, requiredDocumentTypes]); // Dependencias estables
+  }, [canManageEngineering, requiredDocumentTypes]);
 
   const handleBulkUpdateLoteMedido = useCallback(async (newValue: boolean, selectedData: SocioConDocumentos[]) => {
-    if (!isAdmin) return toast.error('Acceso restringido');
+    // CORRECCIÓN: Permitir a Admin e Ingeniero
+    if (!canManageEngineering) return toast.error('Acceso restringido');
     
     const selectedIds = selectedData
       .filter(item => {
@@ -221,11 +223,11 @@ function PartnerDocuments() {
       if (error) throw error;
       toast.success(`Se actualizaron ${selectedIds.length} expedientes`);
       setRowSelection({});
-      fetchAllData(); // Para actualizaciones masivas, un refetch completo es aceptable para asegurar consistencia
+      fetchAllData();
     } catch (error: any) {
       toast.error('Error en actualización masiva');
     }
-  }, [isAdmin, fetchAllData, requiredDocumentTypes]);
+  }, [canManageEngineering, fetchAllData, requiredDocumentTypes]);
 
   const handleDeleteDocument = useCallback(async () => {
     if (!deleteConfirmState.documentId || !deleteConfirmState.documentLink) return;
@@ -315,7 +317,8 @@ function PartnerDocuments() {
           <Checkbox
             checked={row.original.is_lote_medido ?? false}
             onCheckedChange={(v) => handleUpdateLoteMedido(row.original.id, !!v, row.original)}
-            disabled={!isAdmin}
+            // CORRECCIÓN: Habilitado para Engineer también
+            disabled={!canManageEngineering}
             className="w-5 h-5 rounded-md data-[state=checked]:bg-[#9E7FFF] data-[state=checked]:border-[#9E7FFF]"
           />
           <span className={cn(
@@ -390,7 +393,7 @@ function PartnerDocuments() {
         );
       },
     },
-  ], [isAdmin, isEngineer, handleUpdateLoteMedido, requiredDocumentTypes]);
+  ], [isAdmin, isEngineer, canManageEngineering, handleUpdateLoteMedido, requiredDocumentTypes]);
 
   if (loading || userLoading) return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-white">
@@ -424,7 +427,6 @@ function PartnerDocuments() {
 
       <div className="container mx-auto px-6 -mt-12 relative z-20">
         <div className="bg-white p-4 rounded-[2rem] shadow-xl shadow-gray-200/50 border border-gray-100 mb-8 flex flex-col md:flex-row gap-4 items-center">
-          {/* Reemplazamos el Input con el nuevo SearchInputWithDebounce */}
           <SearchInputWithDebounce
             placeholder="Buscar por socio, DNI, manzana o lote..."
             onDebouncedChange={setDebouncedSearchQuery}
@@ -447,7 +449,8 @@ function PartnerDocuments() {
               </SelectContent>
             </Select>
 
-            {isAdmin && Object.keys(rowSelection).length > 0 && (
+            {/* CORRECCIÓN: Botón de acciones ahora visible para Admin y Engineer */}
+            {canManageEngineering && Object.keys(rowSelection).length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button className="h-14 px-6 bg-[#9E7FFF] hover:bg-[#8B6EEF] rounded-2xl font-bold shadow-lg shadow-[#9E7FFF]/20">
@@ -515,7 +518,8 @@ function PartnerDocuments() {
                     <DocumentCardView
                       data={filteredData}
                       requiredDocumentTypes={requiredDocumentTypes}
-                      canManageLoteMedido={isAdmin}
+                      // CORRECCIÓN: Habilitado para Engineer
+                      canManageLoteMedido={canManageEngineering}
                       canDeleteDocuments={isAdmin}
                       onOpenUploadModal={(socio, type) => setModalState({ isOpen: true, socioId: socio.id, socioName: socio.nombres, documentType: type as any })}
                       onDeleteDocument={(id, link, type, name) => setDeleteConfirmState({ isOpen: true, documentId: id, documentLink: link, documentType: type, socioName: name })}
